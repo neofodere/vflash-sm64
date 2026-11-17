@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  DECOMP_REF: 9921382a68bb0c865e5e45eb594d9c64db59b1af
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        region: [us, jp, eu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: n64decomp/sm64
+          ref: ${{ env.DECOMP_REF }}
+          path: third_party/sm64
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm python3
+      - name: Build console image
+        run: make image REGION=${{ matrix.region }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.region }}
+          path: |
+            build/${{ matrix.region }}/BOOT.BIN
+            build/${{ matrix.region }}/gen/asset_table.c
+            build/${{ matrix.region }}/gen/asset_count.txt
+
+  cli:
+    needs: image
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+            cc: gcc
+            exe: ""
+            packages: ""
+          - target: windows-x64
+            cc: x86_64-w64-mingw32-gcc
+            exe: .exe
+            packages: gcc-mingw-w64-x86-64
+          - target: windows-x86
+            cc: i686-w64-mingw32-gcc
+            exe: .exe
+            packages: gcc-mingw-w64-i686
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-us
+          path: image/us
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-jp
+          path: image/jp
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-eu
+          path: image/eu
+      - name: Install cross compiler
+        if: matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+      - name: Build
+        run: |
+          make cli CC=${{ matrix.cc }} EXEEXT=${{ matrix.exe }} LDFLAGS=-static \
+            IMAGES=image REGIONS="us jp eu" VERSION=${{ github.ref_name }}
+      - name: Package
+        run: |
+          name=vflash-sm64-${{ github.ref_name }}-${{ matrix.target }}
+          mkdir "$name"
+          cp build/vflash-sm64${{ matrix.exe }} README.md "$name"/
+          if [ "${{ matrix.exe }}" = ".exe" ]; then
+            zip -r "$name.zip" "$name"
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}
+          path: |
+            vflash-sm64-*.zip
+            vflash-sm64-*.tar.gz
+
+  release:
+    needs: cli
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "vflash-sm64 ${{ github.ref_name }}" \
+            --generate-notes

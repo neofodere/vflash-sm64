@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  DECOMP_REF: 9921382a68bb0c865e5e45eb594d9c64db59b1af
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: n64decomp/sm64
+          ref: ${{ env.DECOMP_REF }}
+          path: third_party/sm64
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm python3
+      - name: Build console images and command-line tool
+        run: |
+          for r in us jp eu; do make image REGION=$r; done
+          make cli test
